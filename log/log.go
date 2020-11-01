@@ -2,7 +2,7 @@
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
-package arpc
+package log
 
 import (
 	"log"
@@ -67,53 +67,57 @@ func (l *logger) SetLogLevel(lvl int) {
 	}
 }
 
-// Debug simply printf
+// Debug .
 func (l *logger) Debug(format string, v ...interface{}) {
 	if LogLevelDebug >= l.level {
 		log.Printf("[DBG] "+format, v...)
 	}
 }
 
-// Info simply printf
+// Info .
 func (l *logger) Info(format string, v ...interface{}) {
 	if LogLevelInfo >= l.level {
 		log.Printf("[INF] "+format, v...)
 	}
 }
 
-// Warn simply printf
+// Warn .
 func (l *logger) Warn(format string, v ...interface{}) {
 	if LogLevelWarn >= l.level {
 		log.Printf("[WRN] "+format, v...)
 	}
 }
 
-// Error simply printf
+// Error .
 func (l *logger) Error(format string, v ...interface{}) {
 	if LogLevelError >= l.level {
 		log.Printf("[Err] "+format, v...)
 	}
 }
 
-func logDebug(format string, v ...interface{}) {
+// Debug .
+func Debug(format string, v ...interface{}) {
 	if DefaultLogger != nil {
 		DefaultLogger.Debug(format, v...)
 	}
 }
 
-func logInfo(format string, v ...interface{}) {
+// Info .
+func Info(format string, v ...interface{}) {
 	if DefaultLogger != nil {
 		DefaultLogger.Info(format, v...)
 	}
 }
 
-func logWarn(format string, v ...interface{}) {
+// Warn .
+func Warn(format string, v ...interface{}) {
 	if DefaultLogger != nil {
 		DefaultLogger.Warn(format, v...)
 	}
 }
 
-func logError(format string, v ...interface{}) {
+// Error .
+func Error(format string, v ...interface{}) {
 	if DefaultLogger != nil {
 		DefaultLogger.Error(format, v...)
 	}

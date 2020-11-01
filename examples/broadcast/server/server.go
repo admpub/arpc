@@ -10,10 +10,11 @@ import (
 )
 
 var mux = sync.RWMutex{}
+var server = arpc.NewServer()
 var clientMap = make(map[*arpc.Client]struct{})
 
 func main() {
-	server := arpc.NewServer()
+
 	server.Handler.Handle("/enter", func(ctx *arpc.Context) {
 		passwd := ""
 		ctx.Bind(&passwd)
@@ -48,7 +49,7 @@ func main() {
 }
 
 func broadcast(i int) {
-	msg := arpc.NewMessage(arpc.CmdNotify, "/broadcast", fmt.Sprintf("broadcast msg %d", i), arpc.DefaultCodec)
+	msg := server.NewMessage(arpc.CmdNotify, "/broadcast", fmt.Sprintf("broadcast msg %d", i))
 	mux.RLock()
 	for client := range clientMap {
 		client.PushMsg(msg, arpc.TimeZero)

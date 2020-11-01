@@ -5,7 +5,7 @@
 package arpc
 
 import (
-	"bytes"
+	"io"
 	"net"
 	"testing"
 )
@@ -47,7 +47,7 @@ func Test_handler_OnDisconnected(t *testing.T) {
 }
 
 func Test_handler_HandleOverstock(t *testing.T) {
-	DefaultHandler.HandleOverstock(func(c *Client, m Message) {})
+	DefaultHandler.HandleOverstock(func(c *Client, m *Message) {})
 }
 
 func Test_handler_OnOverstock(t *testing.T) {
@@ -55,7 +55,7 @@ func Test_handler_OnOverstock(t *testing.T) {
 }
 
 func Test_handler_HandleSessionMiss(t *testing.T) {
-	DefaultHandler.HandleSessionMiss(func(c *Client, m Message) {})
+	DefaultHandler.HandleSessionMiss(func(c *Client, m *Message) {})
 }
 
 func Test_handler_OnSessionMiss(t *testing.T) {
@@ -108,8 +108,8 @@ func Test_handler_SetReaderWrapper(t *testing.T) {
 }
 
 func Test_handler_RecvBufferSize(t *testing.T) {
-	if got := DefaultHandler.RecvBufferSize(); got != 4096 {
-		t.Errorf("handler.RecvBufferSize() = %v, want %v", got, 4096)
+	if got := DefaultHandler.RecvBufferSize(); got != 8192 {
+		t.Errorf("handler.RecvBufferSize() = %v, want %v", got, 8192)
 	}
 }
 
@@ -139,49 +139,6 @@ func Test_handler_Handle(t *testing.T) {
 	DefaultHandler.Handle("/hello", func(*Context) {})
 }
 
-func Test_handler_Recv(t *testing.T) {
-	c := &Client{}
-	c.Head = Header(c.head[:])
-	c.Reader = bytes.NewReader([]byte(NewMessage(CmdRequest, "hello", "hello", DefaultCodec)))
-	_, err := DefaultHandler.Recv(c)
-	if err != nil {
-		t.Errorf("handler.Recv() error = nil")
-	}
-}
-
-func Test_handler_Send(t *testing.T) {
-}
-
-func Test_handler_SendN(t *testing.T) {
-}
-
-func Test_handler_OnMessage(t *testing.T) {
-
-	done := make(chan int, 1)
-	DefaultHandler.Handle("/onmessage", func(*Context) {
-		done <- 1
-	})
-	DefaultHandler.OnMessage(nil, NewMessage(CmdRequest, "/onmessage", "hello", DefaultCodec))
-	select {
-	case <-done:
-	default:
-		t.Errorf("OnMessage not handled")
-	}
-
-	c := newClientWithConn(&net.TCPConn{}, DefaultCodec, DefaultHandler, nil)
-	msg := NewMessage(CmdRequest, "/nohandler", "hello", DefaultCodec)
-	msg[headerIndexMethodLen] = 0
-	DefaultHandler.OnMessage(c, msg)
-
-	msg = NewMessage(CmdRequest, "/onmessage", "hello", DefaultCodec)
-	msg[headerIndexMethodLen] = 0
-	DefaultHandler.OnMessage(c, msg)
-
-	msg = NewMessage(CmdResponse, "/onmessage", "hello", DefaultCodec)
-	msg[headerIndexMethodLen] = 0
-	DefaultHandler.OnMessage(c, msg)
-}
-
 func TestNewHandler(t *testing.T) {
 	if got := NewHandler(); got == nil {
 		t.Errorf("NewHandler() = nil")
@@ -189,6 +146,29 @@ func TestNewHandler(t *testing.T) {
 }
 
 func TestSetHandler(t *testing.T) {
+	d := DefaultHandler
 	h := NewHandler()
 	SetHandler(h)
+	SetLogTag("nothing")
+	HandleConnected(func(*Client) {})
+	HandleConnected(nil)
+	HandleDisconnected(func(*Client) {})
+	HandleDisconnected(nil)
+	HandleOverstock(func(c *Client, m *Message) {})
+	HandleMessageDropped(func(c *Client, m *Message) {})
+	HandleSessionMiss(func(c *Client, m *Message) {})
+	BeforeRecv(func(net.Conn) error { return nil })
+	BeforeSend(func(net.Conn) error { return nil })
+	SetBatchRecv(true)
+	SetBatchSend(true)
+	SetAsyncResponse(true)
+	SetReaderWrapper(func(c net.Conn) io.Reader { return c })
+	SetRecvBufferSize(4096)
+	SetSendQueueSize(4096)
+	Use(func(*Context) {})
+	UseCoder(nil)
+	Handle("nothing", func(*Context) {}, true)
+	HandleNotFound(func(*Context) {})
+	SetBufferFactory(func(int) []byte { return nil })
+	SetHandler(d)
 }

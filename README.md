@@ -1,5 +1,8 @@
 # ARPC - More Effective Network Communication 
 
+[![Mentioned in Awesome Go](https://awesome.re/mentioned-badge-flat.svg)](https://github.com/avelino/awesome-go#distributed-systems
+)
+
 [![GoDoc][1]][2] [![MIT licensed][3]][4] [![Build Status][5]][6] [![Go Report Card][7]][8] [![Coverage Statusd][9]][10]
 
 [1]: https://godoc.org/github.com/lesismal/arpc?status.svg
@@ -27,6 +30,8 @@
 	- [Quick start](#quick-start)
 	- [API Examples](#api-examples)
 		- [Register Routers](#register-routers)
+		- [Router Middleware](#router-middleware)
+		- [Coder Middleware](#coder-middleware)
 		- [Client Call, CallAsync, Notify](#client-call-callasync-notify)
 		- [Server Call, CallAsync, Notify](#server-call-callasync-notify)
 		- [Broadcast - Notify](#broadcast---notify)
@@ -38,9 +43,12 @@
 		- [Custom Codec](#custom-codec)
 		- [Custom Logger](#custom-logger)
 		- [Custom operations before conn's recv and send](#custom-operations-before-conns-recv-and-send)
-		- [Custom arpc.Client's Reader from wrapping net.Conn](#custom-arpcclients-reader-from-wrapping-netconn)
+		- [Custom arpc.Client's Reader by wrapping net.Conn](#custom-arpcclients-reader-by-wrapping-netconn)
 		- [Custom arpc.Client's send queue capacity](#custom-arpcclients-send-queue-capacity)
-
+	- [JS Client](#js-client)
+	- [Web Chat Examples](#web-chat-examples)
+	- [Pub/Sub Examples](#pubsub-examples)
+	- [More Examples](#more-examples)
 
 ## Features
 - [x] Two-Way Calling
@@ -49,6 +57,8 @@
 - [x] Sync and Async Response
 - [x] Batch Write | Writev | net.Buffers 
 - [x] Broadcast
+- [x] Middleware
+- [x] Pub/Sub
 
 | Pattern | Interactive Directions       | Description              |
 | ------- | ---------------------------- | ------------------------ |
@@ -70,9 +80,9 @@
 
 - LittleEndian
 
-| cmd    | async  | methodlen | null    | bodylen | sequence | method               | body |
-| ------ | ------ | --------- | ------- | ------- | -------- | -------------------- | ---- |
-| 1 byte | 1 byte | 1 bytes   | 1 bytes | 4 bytes | 8 bytes  | 0 or methodlen bytes | ...  |
+| bodyLen | reserved | cmd    | flag    | methodLen | sequence | method          | body                    |
+| ------- | -------- | ------ | ------- | --------- | -------- | --------------- | ----------------------- |
+| 4 bytes | 1 byte   | 1 byte | 1 bytes | 1 bytes   | 8 bytes  | methodLen bytes | bodyLen-methodLen bytes |
 
 
 
@@ -135,8 +145,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
-	client.Run()
 	defer client.Stop()
 
 	req := "hello"
@@ -166,9 +174,57 @@ handler = server.Handler
 // client
 handler = client.Handler
 
+// message would be default handled one by one  in the same conn reader goroutine
 handler.Handle("/route", func(ctx *arpc.Context) { ... })
 handler.Handle("/route2", func(ctx *arpc.Context) { ... })
-handler.Handle("method", func(ctx *arpc.Context) { ... })
+
+// this make message handled by a new goroutine
+async := true
+handler.Handle("/asyncResponse", func(ctx *arpc.Context) { ... }, async)
+```
+
+### Router Middleware
+
+See [router middleware](https://github.com/lesismal/arpc/tree/master/middleware/router), it's easy to implement middlewares yourself
+
+```golang
+import "github.com/lesismal/arpc/middleware/router"
+
+var handler arpc.Handler
+
+// package
+handler = arpc.DefaultHandler
+// server
+handler = server.Handler
+// client
+handler = client.Handler
+
+handler.Use(router.Recover)
+handler.Use(router.Logger)
+handler.Use(func(ctx *arpc.Context) { ... })
+handler.Handle("/echo", func(ctx *arpc.Context) { ... })
+handler.Use(func(ctx *arpc.Context) { ... })
+```
+
+
+### Coder Middleware
+
+- Coder Middleware is used for converting a message data to your designed format, e.g encrypt/decrypt and compress/uncompress
+
+```golang
+import "github.com/lesismal/arpc/middleware/coder"
+
+var handler arpc.Handler
+
+// package
+handler = arpc.DefaultHandler
+// server
+handler = server.Handler
+// client
+handler = client.Handler
+
+handler.UseCoder(&coder.Gzip{})
+handler.Handle("/echo", func(ctx *arpc.Context) { ... })
 ```
 
 
@@ -198,14 +254,6 @@ err := client.CallAsync("/call/echo", request, func(ctx *arpc.Context) {
 	ctx.Bind(response)
 	...	
 }, timeout)
-
-// ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-// defer cancel()
-// err := client.CallAsyncWith(ctx, "/call/echo", request, func(ctx *arpc.Context) {
-// 	response := &Echo{}
-// 	ctx.Bind(response)
-// 	...	
-// })
 ```
 
 3. Notify (same as CallAsync with timeout/context, without callback)
@@ -257,7 +305,8 @@ var mux = sync.RWMutex{}
 var clientMap = make(map[*arpc.Client]struct{})
 
 func broadcast() {
-	msg := arpc.NewMessage(arpc.CmdNotify, "/broadcast", fmt.Sprintf("broadcast msg %d", i), nil)
+	var svr *arpc.Server = ... 
+	msg := svr.NewMessage(arpc.CmdNotify, "/broadcast", fmt.Sprintf("broadcast msg %d", i))
 	mux.RLock()
 	for client := range clientMap {
 		client.PushMsg(msg, arpc.TimeZero)
@@ -278,17 +327,14 @@ handler = server.Handler
 // client
 handler = client.Handler
 
-func asyncResponse(ctx *arpc.Context, data interface{}) {
-	ctx.Write(data)
-}
-
+asyncResponse := true // default is true, or set false
 handler.Handle("/echo", func(ctx *arpc.Context) {
 	req := ...
 	err := ctx.Bind(req)
 	if err == nil {
-		go asyncResponse(ctx, req)
+		ctx.Write(data)
 	}
-})
+}, asyncResponse)
 ```
 
 
@@ -373,10 +419,12 @@ client, err := arpc.NewClient(dialer)
 ### Custom Codec
 
 ```golang
+import "github.com/lesismal/arpc/codec"
+
 var codec arpc.Codec = ...
 
 // package
-arpc.DefaultCodec = codec
+codec.Defaultcodec = codec
 
 // server
 svr := arpc.NewServer()
@@ -390,8 +438,10 @@ client.Codec = codec
 ### Custom Logger
 
 ```golang
+import "github.com/lesismal/arpc/log"
+
 var logger arpc.Logger = ...
-arpc.SetLogger(logger) // arpc.DefaultLogger = logger
+log.SetLogger(logger) // log.DefaultLogger = logger
 ``` 
 
 ### Custom operations before conn's recv and send
@@ -406,7 +456,7 @@ arpc.DefaultHandler.BeforeSend(func(conn net.Conn) error) {
 })
 ```
 
-### Custom arpc.Client's Reader from wrapping net.Conn 
+### Custom arpc.Client's Reader by wrapping net.Conn 
 
 ```golang
 arpc.DefaultHandler.SetReaderWrapper(func(conn net.Conn) io.Reader) {
@@ -419,3 +469,131 @@ arpc.DefaultHandler.SetReaderWrapper(func(conn net.Conn) io.Reader) {
 ```golang
 arpc.DefaultHandler.SetSendQueueSize(4096)
 ```
+
+## JS Client 
+
+- See [arpc.js](https://github.com/lesismal/arpc/blob/master/examples/webchat/arpc.js)
+
+## Web Chat Examples
+
+- See [webchat](https://github.com/lesismal/arpc/tree/master/examples/webchat)
+
+
+## Pub/Sub Examples
+
+- start a server
+```golang
+import "github.com/lesismal/arpc/pubsub"
+
+var (
+	address = "localhost:8888"
+
+	password = "123qwe"
+
+	topicName = "Broadcast"
+)
+
+func main() {
+	s := pubsub.NewServer()
+	s.Password = password
+
+	// server publish to all clients
+	go func() {
+		for i := 0; true; i++ {
+			time.Sleep(time.Second)
+			s.Publish(topicName, fmt.Sprintf("message from server %v", i))
+		}
+	}()
+
+	s.Run(address)
+}
+```
+
+- start a subscribe client
+```golang
+import "github.com/lesismal/arpc/log"
+import "github.com/lesismal/arpc/pubsub"
+
+var (
+	address = "localhost:8888"
+
+	password = "123qwe"
+
+	topicName = "Broadcast"
+)
+
+func onTopic(topic *pubsub.Topic) {
+	log.Info("[OnTopic] [%v] \"%v\", [%v]",
+		topic.Name,
+		string(topic.Data),
+		time.Unix(topic.Timestamp/1000000000, topic.Timestamp%1000000000).Format("2006-01-02 15:04:05.000"))
+}
+
+func main() {
+	client, err := pubsub.NewClient(func() (net.Conn, error) {
+		return net.DialTimeout("tcp", address, time.Second*3)
+	})
+	if err != nil {
+		panic(err)
+	}
+	client.Password = password
+
+	// authentication
+	err = client.Authenticate()
+	if err != nil {
+		panic(err)
+	}
+
+	// subscribe topic
+	if err := client.Subscribe(topicName, onTopic, time.Second); err != nil {
+		panic(err)
+	}
+
+	<-make(chan int)
+}
+```
+
+- start a publish client
+```golang
+import "github.com/lesismal/arpc/pubsub"
+
+var (
+	address = "localhost:8888"
+
+	password = "123qwe"
+
+	topicName = "Broadcast"
+)
+
+func main() {
+	client, err := pubsub.NewClient(func() (net.Conn, error) {
+		return net.DialTimeout("tcp", address, time.Second*3)
+	})
+	if err != nil {
+		panic(err)
+	}
+	client.Password = password
+
+	// authentication
+	err = client.Authenticate()
+	if err != nil {
+		panic(err)
+	}
+
+	for i := 0; true; i++ {
+		if i%5 == 0 {
+			// publish msg to all clients
+			client.Publish(topicName, fmt.Sprintf("message from client %d", i), time.Second)
+		} else {
+			// publish msg to only one client
+			client.PublishToOne(topicName, fmt.Sprintf("message from client %d", i), time.Second)
+		}
+		time.Sleep(time.Second)
+	}
+}
+```
+
+
+## More Examples
+
+- See [examples](https://github.com/lesismal/arpc/tree/master/examples)

@@ -5,15 +5,43 @@
 package arpc
 
 import (
-	"encoding/binary"
-	"errors"
 	"time"
+	// "github.com/lesismal/arpc/util"
 )
 
 // Context definition
 type Context struct {
 	Client  *Client
-	Message Message
+	Message *Message
+	Values  map[string]interface{}
+
+	err      interface{}
+	response []interface{}
+	timeout  time.Duration
+
+	done     bool
+	index    int
+	handlers []HandlerFunc
+}
+
+// Get returns value for key
+func (ctx *Context) Get(key string) (interface{}, bool) {
+	if len(ctx.Values) == 0 {
+		return nil, false
+	}
+	value, ok := ctx.Values[key]
+	return value, ok
+}
+
+// Set sets key-value pair
+func (ctx *Context) Set(key string, value interface{}) {
+	if value == nil {
+		return
+	}
+	if ctx.Values == nil {
+		ctx.Values = map[string]interface{}{}
+	}
+	ctx.Values[key] = value
 }
 
 // Body returns body
@@ -34,8 +62,8 @@ func (ctx *Context) Bind(v interface{}) error {
 			*vt = data
 		case *string:
 			*vt = string(data)
-		case *error:
-			*vt = errors.New(bytesToStr(data))
+		// case *error:
+		// 	*vt = errors.New(util.BytesToStr(data))
 		default:
 			return ctx.Client.Codec.Unmarshal(data, v)
 		}
@@ -45,57 +73,49 @@ func (ctx *Context) Bind(v interface{}) error {
 
 // Write responses message to client
 func (ctx *Context) Write(v interface{}) error {
-	return ctx.write(v, 0, TimeForever)
+	return ctx.write(v, false, TimeForever)
 }
 
 // WriteWithTimeout responses message to client with timeout
 func (ctx *Context) WriteWithTimeout(v interface{}, timeout time.Duration) error {
-	return ctx.write(v, 0, timeout)
+	return ctx.write(v, false, timeout)
 }
 
 // Error responses error message to client
-func (ctx *Context) Error(err error) error {
-	return ctx.write(err, 1, TimeForever)
+func (ctx *Context) Error(v interface{}) error {
+	return ctx.write(v, true, TimeForever)
 }
 
-func (ctx *Context) newRspMessage(v interface{}, isError byte) Message {
-	var (
-		data    []byte
-		msg     Message
-		bodyLen int
-	)
-
-	// if ctx.Message.Cmd() != CmdRequest {
-	// 	return nil
+// Next .
+func (ctx *Context) Next() {
+	ctx.index++
+	if !ctx.done && ctx.index < len(ctx.handlers) {
+		ctx.handlers[ctx.index](ctx)
+	}
+	// for !ctx.done && ctx.index < len(ctx.handlers) {
+	// 	ctx.handlers[ctx.index](ctx)
+	// 	ctx.index++
 	// }
+}
 
+// Done .
+func (ctx *Context) Done() {
+	ctx.done = true
+}
+
+func (ctx *Context) write(v interface{}, isError bool, timeout time.Duration) error {
+	cli := ctx.Client
+	req := ctx.Message
+	if req.Cmd() != CmdRequest {
+		return ErrContextResponseToNotify
+	}
 	if _, ok := v.(error); ok {
-		isError = 1
+		isError = true
 	}
-
-	data = valueToBytes(ctx.Client.Codec, v)
-
-	bodyLen = len(data)
-	msg = Message(memGet(HeadLen + bodyLen))
-	binary.LittleEndian.PutUint32(msg[headerIndexBodyLenBegin:headerIndexBodyLenEnd], uint32(bodyLen))
-	binary.LittleEndian.PutUint64(msg[headerIndexSeqBegin:headerIndexSeqEnd], ctx.Message.Seq())
-	msg[headerIndexCmd] = CmdResponse
-	msg[headerIndexAsync] = ctx.Message.Async()
-	msg[headerIndexError] = isError
-	msg[headerIndexMethodLen] = 0
-	copy(msg[HeadLen:], data)
-
-	return msg
+	rsp := newMessage(CmdResponse, req.method(), v, isError, req.IsAsync(), req.Seq(), cli.Handler, cli.Codec, ctx.Values)
+	return cli.PushMsg(rsp, ctx.timeout)
 }
 
-func (ctx *Context) write(v interface{}, isError byte, timeout time.Duration) error {
-	if ctx.Message.Cmd() != CmdRequest {
-		return ErrShouldOnlyResponseToRequestMessage
-	}
-	msg := ctx.newRspMessage(v, isError)
-	return ctx.Client.PushMsg(msg, timeout)
-}
-
-func newContext(c *Client, msg Message) *Context {
-	return &Context{Client: c, Message: msg}
+func newContext(cli *Client, msg *Message, handlers []HandlerFunc) *Context {
+	return &Context{Client: cli, Message: msg, done: false, index: -1, handlers: handlers}
 }
